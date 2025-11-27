@@ -1,0 +1,120 @@
+# 掲示板アプリケーション Serverless Framework 設定
+# AWS Lambda + DynamoDB でサーバーレスアーキテクチャを構築
+
+service: bulletin-board-api
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ap-northeast-1
+  stage: ${opt:stage, 'dev'}
+  
+  # 環境変数
+  environment:
+    USERS_TABLE: ${self:service}-users-${self:provider.stage}
+    POSTS_TABLE: ${self:service}-posts-${self:provider.stage}
+    SECRET_KEY: ${env:SECRET_KEY, 'change-this-in-production'}
+    CORS_ORIGINS: ${env:CORS_ORIGINS, '*'}
+  
+  # IAMロールの設定
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - !GetAtt UsersTable.Arn
+            - !Join ['/', [!GetAtt UsersTable.Arn, 'index/*']]
+            - !GetAtt PostsTable.Arn
+            - !Join ['/', [!GetAtt PostsTable.Arn, 'index/*']]
+
+functions:
+  # FastAPIアプリケーション
+  api:
+    handler: app/main.handler
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: /
+          method: any
+          cors: true
+      - http:
+          path: /{proxy+}
+          method: any
+          cors: true
+
+resources:
+  Resources:
+    # ユーザーテーブル
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: username
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: username-index
+            KeySchema:
+              - AttributeName: username
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    # 投稿テーブル
+    PostsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.POSTS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: post_id
+            AttributeType: S
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: pk
+            AttributeType: S
+          - AttributeName: created_at
+            AttributeType: S
+        KeySchema:
+          - AttributeName: post_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: user_id-index
+            KeySchema:
+              - AttributeName: user_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+          - IndexName: pk-created_at-index
+            KeySchema:
+              - AttributeName: pk
+                KeyType: HASH
+              - AttributeName: created_at
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    dockerizePip: false
+    slim: true
+    strip: false
